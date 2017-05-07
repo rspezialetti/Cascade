@@ -1,0 +1,162 @@
+#include <OpenNI.h>
+#include <opencv2/opencv.hpp>
+
+#include "opencv2/core/core.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+
+#include "NiTE.h"
+
+using namespace openni;
+
+#define DEPTH_RESOLUTION_X 512
+#define DEPTH_RESOLUTION_Y 424
+
+#define FRAMERATE 30
+#define CIRCLE_SIZE 10
+
+void drawCenterOfMass(const cv::Mat& image, nite::UserTracker* p_user_tracker, const nite::UserData& user)
+{
+	double r = 255.0, g = 0.0, b = 0.0;
+
+	float coordinates_in_depth[3] = { 0 };
+
+	p_user_tracker->convertJointCoordinatesToDepth(user.getCenterOfMass().x, user.getCenterOfMass().y, user.getCenterOfMass().z, &coordinates_in_depth[0], &coordinates_in_depth[1]);
+	
+	if (user.isVisible()) 
+	{
+		cv::circle(image, cv::Point(coordinates_in_depth[0], coordinates_in_depth[1]), CIRCLE_SIZE, cv::Scalar(r, g, b), CV_FILLED, 8);
+	}
+	
+}
+
+int main(int argc, char** argv)
+{
+	//Openni Init
+	openni::Status status_openni = openni::OpenNI::initialize();
+	if (status_openni != openni::STATUS_OK)
+	{
+		printf("Failed to initialize OpenNI\n%s\n", openni::OpenNI::getExtendedError());
+		return status_openni;
+	}
+
+	//Open device ANY DEVICE
+	const char* uri_device = openni::ANY_DEVICE;
+	openni::Device device;
+	
+	status_openni = device.open(uri_device);
+	if (status_openni != openni::STATUS_OK)
+	{
+		printf("Failed to open device\n%s\n", openni::OpenNI::getExtendedError());
+		return status_openni;
+	}
+
+	//Nite Init
+	nite::NiTE::initialize();
+	nite::UserTracker *p_user_tracker = new nite::UserTracker();
+
+	if (p_user_tracker->create(&device) != nite::STATUS_OK)
+	{
+		printf("Failed to open user tracker\n");
+		return openni::STATUS_ERROR;
+	}
+
+	//Acquire from depth sensor
+	openni::VideoStream video_stream_depth;
+	video_stream_depth.create(device, openni::SENSOR_DEPTH);
+	video_stream_depth.start();
+	puts("Depth sensor start.");
+	
+	//Video mode for depth
+	openni::VideoMode paramvideo;
+	paramvideo.setResolution(DEPTH_RESOLUTION_X, DEPTH_RESOLUTION_Y);
+	paramvideo.setFps(30);
+	paramvideo.setPixelFormat(openni::PIXEL_FORMAT_DEPTH_100_UM);
+
+	video_stream_depth.setVideoMode(paramvideo);
+	
+	device.setDepthColorSyncEnabled(false);
+
+	openni::VideoStream** stream = new openni::VideoStream*[1];
+	stream[0] = &video_stream_depth;
+	
+	puts("Kinect initialization completed.");
+
+	if (device.getSensorInfo(SENSOR_DEPTH) != NULL)
+	{
+		openni::VideoFrameRef frame_depth;
+		nite::UserTrackerFrameRef frame_user_tracker;
+		
+		cv::Mat m_depth(cv::Size(640, 480), CV_16UC1);
+		
+		cv::namedWindow("Depth", CV_WINDOW_AUTOSIZE);
+
+		int index_changed;
+		nite::Status tracker_status;
+		while (device.isValid())
+		{
+			OpenNI::waitForAnyStream(stream, 1, &index_changed);
+			switch (index_changed)
+			{
+			case 0:
+				
+				//Read frame from user tracker
+				tracker_status = p_user_tracker->readFrame(&frame_user_tracker);
+
+				if (tracker_status != nite::STATUS_OK)
+				{
+					printf("GetNextData failed\n");
+					return -1;
+				}
+				
+				frame_depth = frame_user_tracker.getDepthFrame();
+				if (frame_depth.isValid())
+				{
+					m_depth.data = (uchar*)frame_depth.getData();
+
+					double min, max;
+					cv::minMaxIdx(m_depth, &min, &max);
+					cv::Mat heat_map, colored;
+
+					m_depth.convertTo(heat_map, CV_8U, 255 / (max - min), -min);
+
+					/*Track user*/
+					const nite::Array<nite::UserData>& users = frame_user_tracker.getUsers();
+			
+					cv::cvtColor(heat_map, colored, cv::COLOR_GRAY2RGB);
+					for (int i = 0; i < users.getSize(); ++i)
+					{
+						const nite::UserData& user = users[i];
+
+						if(user.isVisible())
+							drawCenterOfMass(colored, p_user_tracker, user);		
+					}
+			
+					cv::imshow("Depth", colored);
+				}
+				break;
+
+			default:
+				puts("Error retrieving a stream");
+			}
+			cv::waitKey(1);
+		}
+		cv::destroyWindow("Depth");
+	}
+	//Stop and destroy video stream
+	video_stream_depth.stop();
+	video_stream_depth.destroy();
+
+	//Close device
+	device.close();
+
+	//Delete user tracker
+	delete p_user_tracker;
+
+	//Close Nite
+	nite::NiTE::shutdown();
+
+	//Close OpeNI
+	openni::OpenNI::shutdown();
+
+}
