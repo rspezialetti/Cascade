@@ -1,16 +1,18 @@
 #include "calibration.h"
 
+#include <fstream>
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 
-int findFloor(openni::Device* p_to_device, openni::VideoStream* p_to_vs_color, openni::VideoStream* p_to_vs_depth, CoordinatesMapper* p_to_coordmapper, nite::UserTracker* p_to_user_tracker, const double rgb_scaling, cv::Point3d& floor_origin, cv::Point3d& floor_normal) 
+int findFloor(openni::Device* p_to_device, openni::VideoStream* p_to_vs_color, openni::VideoStream* p_to_vs_depth, CoordinatesMapper* p_to_coordmapper, nite::UserTracker* p_to_user_tracker, const double rgb_scaling, cv::Point3d& floor_point, cv::Point3d& floor_normal) 
 {
 		openni::VideoStream** stream = new openni::VideoStream*[2];
 		stream[0] = p_to_vs_color;
 		stream[1] = p_to_vs_depth;
-
+		
 		puts("Kinect initialization completed.");
 
 		cv::Mat m_rgb(cv::Size(COLOR_RESOLUTION_X, COLOR_RESOLUTION_Y), CV_8UC3);
@@ -27,7 +29,7 @@ int findFloor(openni::Device* p_to_device, openni::VideoStream* p_to_vs_color, o
 
 		int index_changed;
 
-		cv::Size rgb_scaled(std::floor(COLOR_RESOLUTION_X / rgb_scaling), std::floor(COLOR_RESOLUTION_Y / rgb_scaling));
+		cv::Size rgb_scaled(std::floor(COLOR_RESOLUTION_X / 1), std::floor(COLOR_RESOLUTION_Y / 1));
 
 		while (p_to_device->isValid())
 		{
@@ -73,47 +75,72 @@ int findFloor(openni::Device* p_to_device, openni::VideoStream* p_to_vs_color, o
 					nite::UserTrackerFrameRef frame_user_tracker;
 					p_to_user_tracker->readFrame(&frame_user_tracker);
 
-					const nite::Plane floor = frame_user_tracker.getFloor();
-
 					//Copy plane normal
-					floor_normal.x = floor.normal.x;
-					floor_normal.y = floor.normal.y;
-					floor_normal.z = floor.normal.z;
+					floor_normal.x = frame_user_tracker.getFloor().normal.x;
+					floor_normal.y = frame_user_tracker.getFloor().normal.y;
+					floor_normal.z = frame_user_tracker.getFloor().normal.z;
 
 					//Copy plane origin
-					floor_origin.x = floor.point.x;
-					floor_origin.y = floor.point.y;
-					floor_origin.z = floor.point.z;
-
-					cv::Point2i floor_rgb, user_rgb(-1,-1);
-					p_to_coordmapper->projectRealWordlToRgb(floor_origin, floor_rgb, rgb_scaling);
+					floor_point.x = frame_user_tracker.getFloor().point.x;
+					floor_point.y = frame_user_tracker.getFloor().point.y;
+					floor_point.z = frame_user_tracker.getFloor().point.z;
+					
+					float floor_depth_x = 0, floor_depth_y = 0; 
+					p_to_user_tracker->convertJointCoordinatesToDepth(floor_point.x, floor_point.y, floor_point.z, &floor_depth_x, &floor_depth_y);
+					
+					float floor_rgb_x = 0, floor_rgb_y = 0;
+					p_to_coordmapper->depthToColor(floor_depth_x, floor_depth_y, floor_point.z, floor_rgb_x, floor_rgb_y);
+					
+					cv::Point2i floor_rgb;
+					floor_rgb.x = static_cast<int>(std::max(0.f, std::min(1.f *COLOR_RESOLUTION_X-1, floor_rgb_x)));
+					floor_rgb.y = static_cast<int>(std::max(0.f, std::min(1.f *COLOR_RESOLUTION_Y-1, floor_rgb_y)));
 
 					const nite::Array<nite::UserData>& users = frame_user_tracker.getUsers();
 
-					cv::Point3d user_com;
+					cv::Point3d usr_com, usr_com_on_floor;
+					bool user_found = false;
 					for (int i = 0; i < users.getSize(); ++i)
 					{
 						const nite::UserData& user = users[i];
 
 						if (user.isVisible() && !user.isLost())
 						{
-							user_com.x = user.getCenterOfMass().x;
-							user_com.y = user.getCenterOfMass().y;
-							user_com.z = user.getCenterOfMass().z;
+							user_found = true;
+
+							usr_com.x = user.getCenterOfMass().x;
+							usr_com.y = user.getCenterOfMass().y;
+							usr_com.z = user.getCenterOfMass().z;
 						}
 						break;
 					}
 
-					p_to_coordmapper->projectRealWordlToRgb(user_com, user_rgb, rgb_scaling);
-
 					if (m_rgb_resized.data)
 					{
-						cv::circle(m_rgb_resized, floor_rgb, 10, cv::Scalar(0, 255, 0), CV_FILLED, 8);
+						if (floor_rgb.x != 0 && floor_rgb.y != 0)
+							cv::circle(m_rgb_resized, floor_rgb, 10, cv::Scalar(0, 255, 0), CV_FILLED, 8);
+					
+						if (user_found) 
+						{
+							p_to_coordmapper->setFloor(floor_point);
+							p_to_coordmapper->setFloorNormal(floor_normal);
+	
+							cv::Point2i usr_com_rgb;
+							p_to_coordmapper->projectUserToProjector(p_to_user_tracker, usr_com, false, usr_com_rgb);
+							cv::circle(m_rgb_resized, usr_com_rgb, 10, cv::Scalar(255, 255, 0), CV_FILLED, 8);
+							
+							//Draw user on depth
+							float usr_vis_x = 0, usr_vis_y = 0;
+							p_to_user_tracker->convertJointCoordinatesToDepth(usr_com.x, usr_com.y, usr_com.z, &usr_vis_x, &usr_vis_y);
+							cv::Point2i com_to_vis(static_cast<int>(usr_vis_x), static_cast<int>(usr_vis_y));
 
-						if(user_rgb.x != -1 && user_rgb.y != -1)
-							cv::circle(m_rgb_resized, user_rgb, 10, cv::Scalar(255, 0, 0), CV_FILLED, 8);
-
-						cv::imshow("Rgb", m_rgb_resized);
+							cv::circle(m_depth_colored, com_to_vis, 10, cv::Scalar(255, 0, 0), CV_FILLED, 8);
+						}
+						//Show RGB at half size
+						cv::resizeWindow("Rgb", COLOR_RESOLUTION_X*0.5, COLOR_RESOLUTION_Y*0.5);
+						
+						cv::Mat rgb_for_vis;
+						cv::resize(m_rgb_resized, rgb_for_vis, cv::Size(COLOR_RESOLUTION_X*0.5, COLOR_RESOLUTION_Y*0.5));
+						cv::imshow("Rgb", rgb_for_vis);
 					}
 				
 					cv::imshow("Depth", m_depth_colored);			
@@ -144,7 +171,7 @@ int calibrate(const cv::Mat& m_pattern, openni::Device *p_to_device, openni::Vid
 	std::vector<cv::Point2f> v_corners_pattern;
 	std::vector<cv::Point2f> v_corners_acquisition;
 
-	if (findChessboardCorners(m_pattern, corners, v_corners_pattern))
+	if (findChessboardCorners(m_pattern, corners, v_corners_pattern, CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE))
 	{
 		drawChessboardCorners(m_pattern, corners, cv::Mat(v_corners_pattern), true);
 
@@ -159,6 +186,8 @@ int calibrate(const cv::Mat& m_pattern, openni::Device *p_to_device, openni::Vid
 		openni::VideoFrameRef frame_color;
 
 		cv::namedWindow("Rgb", CV_WINDOW_AUTOSIZE);
+		cv::namedWindow("Pattern", CV_WINDOW_NORMAL);
+		cv::resizeWindow("Pattern", m_pattern.cols/ 3, m_pattern.rows / 3);
 	
 		int index_changed;
 
@@ -179,7 +208,8 @@ int calibrate(const cv::Mat& m_pattern, openni::Device *p_to_device, openni::Vid
 				if (frame_color.isValid())
 				{
 					m_rgb.data = (uchar*)frame_color.getData();
-				
+					//cv::flip(m_rgb, m_rgb, 1);
+
 					if (m_rgb.data)
 					{
 						cv::cvtColor(m_rgb, m_rgb, CV_BGR2RGB);
@@ -188,6 +218,10 @@ int calibrate(const cv::Mat& m_pattern, openni::Device *p_to_device, openni::Vid
 
 						if (findChessboardCorners(m_rgb_resized, corners, v_corners_acquisition))
 						{
+							cv::Mat m_rgb_gray;
+							cvtColor(m_rgb_resized, m_rgb_gray, CV_BGR2GRAY);
+							cv::cornerSubPix(m_rgb_gray, v_corners_acquisition, corners, cv::Size(-1, -1), cv::TermCriteria(CV_TERMCRIT_EPS + CV_TERMCRIT_ITER, 30, 0.1));
+							   
 							drawChessboardCorners(m_rgb_resized, corners, cv::Mat(v_corners_acquisition), true);
 							if ((char)cv::waitKey(1) == 99)
 							{
@@ -220,13 +254,25 @@ int calibrate(const cv::Mat& m_pattern, openni::Device *p_to_device, openni::Vid
 		}
 		m_calibration = cv::findHomography(v_corners_pattern, v_corners_acquisition, 0);
 
-		cv::Mat m_pattern_dist;
-		cv::warpPerspective(m_pattern, m_pattern_dist, m_calibration, m_pattern.size());
+		//cv::Mat m_pattern_dist;
+		//cv::warpPerspective(m_pattern, m_pattern_dist, m_calibration, m_pattern.size());
 
-		cv::namedWindow("Pattern warped", cv::WINDOW_AUTOSIZE);
-		cv::imshow("Pattern warped", m_pattern_dist);
+		std::vector<cv::Point2f> v_corners_warped;
+		cv::Mat inv = m_calibration;
+		cv::perspectiveTransform(v_corners_acquisition, v_corners_warped, inv.inv());
+		std::ofstream corners("corners.txt");
+		for (size_t i_c = 0; i_c <v_corners_warped.size(); ++i_c)
+		{
+			cv::circle(m_pattern, v_corners_warped[i_c], 10, cv::Scalar(255, 255, 0), CV_FILLED, 1);
+			corners << v_corners_warped[i_c] << std::endl;
+		}
+		corners.close();
 
-		cv::waitKey(1);
+		cv::namedWindow("Pattern warped", cv::WINDOW_NORMAL);
+		cv::imshow("Pattern warped", m_pattern);
+		cv::resizeWindow("Pattern warped", m_pattern.cols / 3, m_pattern.rows / 3);
+
+		cv::waitKey(0);
 
 		cv::destroyWindow("Rgb");
 		cv::destroyWindow("Pattern");

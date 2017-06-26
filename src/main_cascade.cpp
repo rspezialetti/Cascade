@@ -19,7 +19,6 @@
 #define CIRCLE_SIZE 10
 
 #define MAX_USERS 6
-#define MAX_FRAME 90
 
 const int colors[] = { 255, 0, 0, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 255, 0, 0, 255};
 
@@ -92,9 +91,10 @@ std::vector<float> getStillUsers(nite::UserTracker *p_user_tracker, openni::Devi
 
 		for (int i = 0; i < users.getSize(); ++i)
 		{
+
 			const nite::UserData& user = users[i];
 
-			const int id_user = user.getId();
+			const int id_user = (user.getId() <= MAX_USERS) ? user.getId()-1 : MAX_USERS -1;
 			v_id_users[i] = id_user;
 
 			v_users_com[id_user] = std::vector<float>{ user.getCenterOfMass().x, user.getCenterOfMass().y, user.getCenterOfMass().z };
@@ -106,25 +106,25 @@ std::vector<float> getStillUsers(nite::UserTracker *p_user_tracker, openni::Devi
 	//Now analysis on users
 	for (int i_u = 0; i_u < max_users; ++i_u)
 	{
-		std::vector<double> v_last_user_coord(3 * buffer.size(), 0.0);
+		const int id_user = v_id_users[i_u];
+
+		std::vector<float> v_last_user_coord(3 * buffer.size(), 0.0);
 		for (size_t i_b = 0; i_b < buffer.size(); ++i_b)
 		{
-			v_last_user_coord[0 + (i_b * 3)] = buffer[i_b][i_u][0];
-			v_last_user_coord[1 + (i_b * 3)] = buffer[i_b][i_u][1];
-			v_last_user_coord[2 + (i_b * 3)] = buffer[i_b][i_u][2];
+			v_last_user_coord[0 + (i_b * 3)] = buffer[i_b][id_user][0];
+			v_last_user_coord[1 + (i_b * 3)] = buffer[i_b][id_user][1];
+			v_last_user_coord[2 + (i_b * 3)] = buffer[i_b][id_user][2];
 		}
 
-		double std = calculateSTDV<double>(v_last_user_coord);
-
-		if (std > 0.0 && std < threshold_stdv)
+		const float std = checkUserMovement(v_last_user_coord);	
+		printf("Dev: %f \n", std);
+		
+		if (std > 0.0 && std <= threshold_stdv)
 		{
-			const int id_user = v_id_users[i_u];
-
 			v_users_coord_in_mm.push_back(v_users_com[id_user][0]);
 			v_users_coord_in_mm.push_back(v_users_com[id_user][1]);
 			v_users_coord_in_mm.push_back(v_users_com[id_user][2]);
 		}
-
 	}
 
 	return v_users_coord_in_mm;
@@ -161,7 +161,6 @@ openni::Status createVideoStream(const int mode, const std::string kinect_id, op
 
 	p_to_video_stream->setVideoMode(params_videomode);
 	p_to_device->setDepthColorSyncEnabled(false);
-	
 	return status_creation;
 }
 
@@ -182,8 +181,6 @@ void shutDown(CoordinatesMapper* p_to_coord_mapper, openni::VideoStream* p_to_de
 
 int main(int argc, char** argv)
 {
-	std::cout << "Start"<< std::endl;
-
 	//MODE 0 calibration and 1 user tracking
 	int mode = -1;
 	std::string kinect_id = "";
@@ -191,25 +188,21 @@ int main(int argc, char** argv)
 	/*Read command line*/
 	if (!readCmdLine(argc, argv, mode, kinect_id))
 		return -1;
-	
+
 	/*Read Configuration File*/
 	const std::string path_to_conf_file = "../data/config.txt";
 	std::map<std::string, std::string> m_init_values;
 
 	if (!readConfigurationFile(path_to_conf_file, m_init_values))
 	{
-		std::cerr << "Impossible to read: "<< path_to_conf_file << std::endl;
+		std::cerr << "Impossible to read: " << path_to_conf_file << std::endl;
 		return -1;
 	}
-			
+
+	const int id_slave = boost::lexical_cast<int>(m_init_values["id"]);
+
 	/*Set parameters*/
 	CoordinatesMapper *p_to_coord_mapper = new CoordinatesMapper(m_init_values);
-
-	if (!boost::lexical_cast<int>(m_init_values["use_calibration"]))
-	{
-		p_to_coord_mapper->setMaxRangeX(boost::lexical_cast<int>(m_init_values["max_x_range"]));
-		p_to_coord_mapper->setMaxRangeZ(boost::lexical_cast<int>(m_init_values["max_z_range"]));
-	}
 
 	/*Openni Init*/
 	openni::Status status_openni = openni::OpenNI::initialize();
@@ -381,15 +374,32 @@ int main(int argc, char** argv)
 		{
 			boost::asio::io_service io_service;
 
+			const bool track_users = boost::lexical_cast<int>(m_init_values["track_users"]);
+			const int number_of_frame = boost::lexical_cast<int>(m_init_values["frame_for_still"]);
 			const std::string address = m_init_values["server_address"];
 			const std::string port = m_init_values["server_port"];
 
 			const std::string fn_timestamp = "C:" + m_init_values["file_timestamp"];
 
 			const int use_calibration = boost::lexical_cast<int>(m_init_values["use_calibration"]);
+			p_to_coord_mapper->setUseCalibration(use_calibration);
 
-			const double th_std = 50;		
-			boost::circular_buffer<std::vector<std::vector<float>>> buffer(MAX_FRAME);
+			if (!use_calibration) 
+			{
+				cv::FileStorage f_points("../data/points_calibration.yaml", cv::FileStorage::READ);
+
+				cv::Point3f sx_front, dx_front, sx_back, dx_back; 
+				f_points["sx_front"] >> sx_front;
+				f_points["dx_front"] >> dx_front;
+				f_points["sx_back"] >> sx_back;
+				f_points["dx_back"] >> dx_back;
+
+				p_to_coord_mapper->setMaxRangeX(sx_front.x - dx_front.x);
+				p_to_coord_mapper->setMaxRangeZ(dx_back.z - dx_front.z);
+			}
+
+			const double th_std = boost::lexical_cast<double>(m_init_values["th_for_still"]);
+			boost::circular_buffer<std::vector<std::vector<float>>> buffer(number_of_frame);
 
 			clock_t last_timestamp = time(0);
 			writeTimestamp(fn_timestamp, last_timestamp);
@@ -398,7 +408,10 @@ int main(int argc, char** argv)
 
 			try 
 			{
-				p_udp_client = new UDPClient(io_service, address, port, MAX_USERS);
+				p_udp_client = new UDPClient(io_service, address, port);
+
+				const float send_intervall = boost::lexical_cast<float>(m_init_values["send_intervall"]);
+				p_udp_client->setSendIntervall(send_intervall);
 			}
 			catch(std::exception& exception)
 			{
@@ -413,7 +426,8 @@ int main(int argc, char** argv)
 				if (file_storage.open(fn_calibration_matrix, cv::FileStorage::READ))
 				{
 					file_storage["calibration"] >> calibration;
-					calibration_inv = calibration.inv();
+					
+				    calibration_inv = calibration.inv();
 
 					file_storage["floor_origin"] >> plane_origin;
 					file_storage["floor_normal"] >> plane_normal;
@@ -434,18 +448,31 @@ int main(int argc, char** argv)
 				while (!GetAsyncKeyState(VK_ESCAPE))
 				{
 					openni::VideoFrameRef frame_depth;
-					std::vector<float> v_users_cord_mm = trackUsers(p_to_user_tracker, p_to_device, p_to_depth_stream, frame_depth);
 
-					//std::vector<float> v_users_cord_mm = getStillUsers(p_to_user_tracker, p_to_device, p_to_depth_stream, frame_depth, buffer, th_std);
+					std::vector<float> v_users_cord_mm;
+					if (track_users)
+						v_users_cord_mm = trackUsers(p_to_user_tracker, p_to_device, p_to_depth_stream, frame_depth);
+					else
+						v_users_cord_mm = getStillUsers(p_to_user_tracker, p_to_device, p_to_depth_stream, frame_depth, buffer, th_std);
 					
 					std::vector<int> v_users_cord_on_projector;
 					for (size_t i_u = 0; i_u < v_users_cord_mm.size(); i_u += 3)
 					{
-						cv::Point2i user_on_projector;
-						p_to_coord_mapper->projectCoordinatesToProjector(cv::Point3d(v_users_cord_mm[i_u], v_users_cord_mm[i_u + 1], v_users_cord_mm[i_u + 2]), user_on_projector);
+						cv::Point2i usr_on_projector;
+						cv::Point3d usr_com(v_users_cord_mm[i_u], v_users_cord_mm[i_u + 1], v_users_cord_mm[i_u + 2]);
 
-						v_users_cord_on_projector.push_back(user_on_projector.x);
-						v_users_cord_on_projector.push_back(user_on_projector.y);
+						if (use_calibration) 
+						{
+							p_to_coord_mapper->projectUserToProjector(p_to_user_tracker, usr_com, true, usr_on_projector);
+						}
+						else 
+						{
+							p_to_coord_mapper->projectUserToProjector(usr_com, usr_on_projector);
+						}
+					
+						v_users_cord_on_projector.push_back(usr_on_projector.x);
+						v_users_cord_on_projector.push_back(usr_on_projector.y);
+
 					}
 
 					if (v_users_cord_on_projector.size() > 0)
@@ -453,7 +480,8 @@ int main(int argc, char** argv)
 						//send
 						try
 						{
-							p_udp_client->send(v_users_cord_on_projector);
+							const std::string packet = p_udp_client->buildPacket(id_slave, v_users_cord_on_projector);
+							p_udp_client->send(packet);
 						}
 						catch (std::exception& e)
 						{

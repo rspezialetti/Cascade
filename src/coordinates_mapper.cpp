@@ -1,7 +1,9 @@
-#include "..\include\coordinates_mapper.h"
+#include "coordinates_mapper.h"
 
 #include <boost\lexical_cast.hpp>
 
+#include <algorithm>
+#include <fstream>
 #include <iostream>
 
 CoordinatesMapper::CoordinatesMapper(std::map<std::string, std::string>& values)
@@ -87,34 +89,58 @@ bool CoordinatesMapper::init()
 	return is_ready;
 }
 
-void CoordinatesMapper::projectCoordinatesToProjector(const cv::Point3d& point_in_millimiters, cv::Point2i& point_in_pixels)
+void CoordinatesMapper::projectUserToProjector(const cv::Point3d& point_in_millimiters, cv::Point2i& point_in_pixels)
 {
-	std::vector<cv::Point2d> v_p_out;
-	if(use_calibration_)
+		
+	const int y = static_cast<int>((projector_resolution_y_ - 1) - (projector_resolution_y_ - 1) *((point_in_millimiters.z / (double)max_range_z_)));
+	const int x = static_cast<int>((projector_resolution_x_ - 1) - ((projector_resolution_x_ - 1) *((-point_in_millimiters.x + (max_range_x_*0.5)) / (double)max_range_x_)));
+
+	point_in_pixels.x = std::max<int>(0, std::min<int>(x, projector_resolution_x_ - 1));
+	point_in_pixels.y = std::max<int>(0, std::min<int>(y, projector_resolution_y_ - 1));
+}
+
+//void CoordinatesMapper::projectCoordinatesToProjector(const cv::Point2d& point_in_rgb, cv::Point2i& point_in_pixels)
+//{
+//	std::vector<cv::Point2d> v_p_out;
+//
+//	//Warping
+//	std::vector<cv::Point2d> v_p_in{ cv::Point2d(point_in_rgb.x/rgb_scale_, point_in_rgb.y/rgb_scale_) };
+//	
+//	cv::perspectiveTransform(v_p_in, v_p_out, calibration_);
+//
+//	const int point_x_int = static_cast<int>(std::floor(v_p_out[0].x));
+//	const int point_y_int = static_cast<int>(std::floor(v_p_out[0].y));
+//
+//	point_in_pixels.x = std::max(0, std::min(point_x_int, projector_resolution_x_ - 1));
+//	//point_in_pixels.y = std::max(0, std::min(projector_resolution_y_ - point_y_int, projector_resolution_y_ - 1));
+//	point_in_pixels.y = std::max(0, std::min(point_y_int, projector_resolution_y_ - 1));
+//}
+
+void CoordinatesMapper::projectUserToProjector(const nite::UserTracker *p_to_usr_tracker, const cv::Point3d& point_in_mm, const bool warp, cv::Point2i& point_in_pixels)
+{
+	cv::Point3d point_mm_floor;
+	pointToPlaneProjection(floor_, floor_normal_, point_in_mm, point_mm_floor);
+
+	float usr_depth_x = 0, usr_depth_y = 0;
+	p_to_usr_tracker->convertJointCoordinatesToDepth(point_mm_floor.x, point_mm_floor.y, point_mm_floor.z, &usr_depth_x, &usr_depth_y);
+
+	float usr_rgb_x = 0;
+	float usr_rgb_y = 0;
+	depthToColor(usr_depth_x, usr_depth_y, point_mm_floor.z, usr_rgb_x, usr_rgb_y);
+
+	//Add warping
+	if (warp) 
 	{
-		//Point on the dance floor like blood
-		cv::Point3d point_on_floor;
-		pointToPlaneProjection(floor_, floor_normal_, point_in_millimiters, point_on_floor);
-
-		//Point in RGB
-		cv::Point2i point_in_rgb;
-		projectRealWordlToRgb(point_on_floor, point_in_rgb, rgb_scale_);
-
 		//Warping
-		std::vector<cv::Point2d> v_p_in{ point_in_rgb };
+		std::vector<cv::Point2d> v_p_in{ cv::Point2d(usr_rgb_x /(float)rgb_scale_, usr_rgb_y /(float)rgb_scale_) };
+		std::vector<cv::Point2d> v_p_out;
 		cv::perspectiveTransform(v_p_in, v_p_out, calibration_);
-
+		
+		usr_rgb_x = v_p_out[0].x;
+		usr_rgb_y = (std::floor((projector_resolution_y_ -1) *0.5)) - v_p_out[0].y;
 	}
-	else
-	{
-		v_p_out.resize(1, cv::Point2d(point_in_millimiters.z / (double)max_range_z_, ((-point_in_millimiters.x + (max_range_x_*0.5)) / (double)max_range_x_) ));
-	}
-
-	const int point_x_int = static_cast<int>(std::floor(v_p_out[0].x));
-	const int point_y_int = static_cast<int>(std::floor(v_p_out[0].y));
-
-	point_in_pixels.x = std::min(point_x_int, projector_resolution_x_ - 1);
-	//point_in_pixels.y = std::min(projector_resolution_y_ - point_y_int, projector_resolution_y_ - 1);
-	point_in_pixels.y = std::min(point_y_int, projector_resolution_y_ - 1);
+	
+	point_in_pixels.x = static_cast<int>(std::max<int>(0, std::min<int>(std::floor(usr_rgb_x), COLOR_RESOLUTION_X - 1)));
+	point_in_pixels.y = static_cast<int>(std::max<int>(0, std::min<int>(std::floor(usr_rgb_y), COLOR_RESOLUTION_Y - 1)));
 
 }
