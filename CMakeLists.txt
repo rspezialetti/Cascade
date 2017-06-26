@@ -23,15 +23,26 @@ if(Nite2_FOUND)
 	add_definitions(${NITE2_DEFINITIONS})
 endif(Nite2_FOUND)
 
-set(HEADER	 ${PROJECT_SOURCE_DIR}/include/NiteSampleUtilities.h)
+#finde BOOST
+find_package(Boost REQUIRED COMPONENTS system filesystem program_options)
+if(Boost_FOUND)
+	include_directories(${Boost_INCLUDE_DIRS})
+	link_directories(${Boost_LIBRARY_DIRS})
+endif(Boost_FOUND)
 
-set(SOURCES  ${PROJECT_SOURCE_DIR}/src/main_cascade.cpp)
+set(HEADER	 ${PROJECT_SOURCE_DIR}/include/calibration.h
+			 ${PROJECT_SOURCE_DIR}/include/utils.h
+			 ${PROJECT_SOURCE_DIR}/include/UDPClient.hpp
+			 ${PROJECT_SOURCE_DIR}/include/coordinates_mapper.h)
+
+set(SOURCES  ${PROJECT_SOURCE_DIR}/src/main_cascade.cpp
+			 ${PROJECT_SOURCE_DIR}/src/calibration.cpp
+			  ${PROJECT_SOURCE_DIR}/src/utils.cpp
+			  ${PROJECT_SOURCE_DIR}/src/coordinates_mapper.cpp )
 
 add_executable(cascade ${SOURCES} ${HEADER})
 include_directories(${PROJECT_SOURCE_DIR}/include/)
 target_link_libraries(cascade ${OpenNI2_LIBRARY})
 target_link_libraries(cascade ${NITE2_LIBRARY})
-target_link_libraries(cascade ${OpenCV_LIBS} )
-
-
-
+target_link_libraries(cascade ${OpenCV_LIBS})
+target_link_libraries(cascade ${Boost_LIBRARY_DIRS})
