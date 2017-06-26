@@ -1,12 +1,6 @@
 #ifndef CALIBRATION_H
 #define CALIBRATION_H
 
-#define DEPTH_RESOLUTION_X 640
-#define DEPTH_RESOLUTION_Y 480
-
-#define COLOR_RESOLUTION_X 1920
-#define COLOR_RESOLUTION_Y 1080
-
 #include <string>
 
 #include <OpenNI.h>
