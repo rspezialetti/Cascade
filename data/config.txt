@@ -1,0 +1,27 @@
+PARAMETER_NAME:VALUE
+id:1
+server_address:192.168.1.201
+server_port:13371
+resolution_projector_x:1920
+resolution_projector_y:1080
+file_calibration_matrix:..//data//calibration.yaml
+file_calibration_pattern:..//data//projected-pattern.png
+file_timestamp://log//log.txt
+corners_calibration_x:9
+corners_calibration_y:4
+#1 use calibration 0 no calibration
+use_calibration:1
+visualize_tracking:1
+#RGB intrinsic
+fx:1081.37
+fy:1081.37
+cx:959.5
+cy:539.5
+rgb_scale_factor:3
+rgb_resolution_x:1920
+rgb_resolution_y:1080
+track_users:1
+frame_for_still:30
+th_for_still:130
+send_intervall:0
+
