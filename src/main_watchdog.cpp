@@ -116,16 +116,6 @@ int main(int argc, char *argv[])
 	LPSTR name_exe = const_cast<char *>(path_to_exe.c_str());
 	LPSTR dir_cascade = const_cast<char *>(path_to_cascade.c_str());
 
-	if (!CreateProcess(NULL, name_exe, NULL, NULL, FALSE, 0, NULL, dir_cascade, &si, &pi))
-	{
-		printf("CreateProcess failed (%d).\n", GetLastError());
-		return 0;
-	}
-	else 
-	{
-		printf("Cascade is running with PID: %d \n", pi.dwProcessId);
-	}
-
 	//start log
 	time_t now = std::time(0);
 	tm *local_time = std::localtime(&now);
@@ -140,6 +130,50 @@ int main(int argc, char *argv[])
 
 	std::string fn_log = "C://log//" + date + ".log";
 	std::ofstream *p_file_log = new std::ofstream(fn_log, std::ios::app);
+
+	//Get date
+	now = std::time(0);
+	local_time = std::localtime(&now);
+
+	ss_time.str("");
+	ss_time << std::put_time(local_time, "%H-%M-%S");
+	hour = ss_time.str();
+
+	if (!CreateProcess(NULL, name_exe, NULL, NULL, FALSE, 0, NULL, dir_cascade, &si, &pi))
+	{
+		printf("CreateProcess failed (%d).\n", GetLastError());
+		return 0;
+	}
+	else 
+	{
+		WaitForSingleObject(pi.hProcess, 1000);
+
+		DWORD exit_code;
+		int result = GetExitCodeProcess(pi.hProcess, &exit_code);
+
+		if (exit_code == 1)
+		{
+			std::cout << "Device is not available "<< std::endl;
+
+			*p_file_log << "[IMPOSSIBLE TO START]" << hour << std::endl;
+
+			p_file_log->close();
+
+			//Terminate process
+			bool terminate = TerminateProcess(pi.hThread, 9); 
+
+			// Close process and thread handles. 
+			CloseHandle(pi.hProcess);
+			CloseHandle(pi.hThread);
+
+			return - 1;
+
+		}
+	}
+
+	printf("Cascade is running with PID: %d \n", pi.dwProcessId);
+
+	*p_file_log << "[START]" << hour << std::endl;
 
 	std::mutex mutex;
 	std::condition_variable condition;
@@ -192,6 +226,9 @@ int main(int argc, char *argv[])
 		}
 		else 
 		{
+
+
+
 			//Kinect is not running shutdown
 			*p_file_log << "[RESTART]" << hour << std::endl;
 
@@ -208,4 +245,4 @@ int main(int argc, char *argv[])
 	}
 
 	return 0;
-}
+ }
